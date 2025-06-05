@@ -1,15 +1,35 @@
-// session-tracker.js - Optimized for Claude Code in WSL on Windows 11
+// session-tracker.js - Enhanced Claude Code Session Tracker with Auto-Detection
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 
+// UUID generation function
+function generateUUID() {
+    return crypto.randomUUID ? crypto.randomUUID() : 
+           'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+}
+
+// Import new modules
+const ClaudeAutoDetector = require('./auto-detector');
+const ProjectDetector = require('./project-detector');
+const ExportUtils = require('./export-utils');
+const { getConfig } = require('./config');
+
+// Global configuration
+const config = getConfig();
+let autoDetector = null;
+
+// Data files and directories
 const SESSION_FILE = '.claude-sessions.json';
 const CLAUDE_CONFIG_DIR = path.join(os.homedir(), '.claude');
 const CLAUDE_SETTINGS_FILE = path.join(CLAUDE_CONFIG_DIR, 'settings.json');
-const MAX_HOURS = 5;
+
+// Configuration-driven constants
+const MAX_HOURS = config.get('sessions.maxHours', 5);
 const MAX_SESSION_MS = MAX_HOURS * 60 * 60 * 1000;
-const WARNING_30_MIN = 30 * 60 * 1000;
-const WARNING_10_MIN = 10 * 60 * 1000;
+const WARNING_30_MIN = config.get('sessions.warningTimes.warning30', 30 * 60 * 1000);
+const WARNING_10_MIN = config.get('sessions.warningTimes.warning10', 10 * 60 * 1000);
 
 let warningTimeouts = [];
 
@@ -138,18 +158,91 @@ function showWSLNotification(title, message) {
 function loadData() {
     try {
         if (fs.existsSync(SESSION_FILE)) {
-            return JSON.parse(fs.readFileSync(SESSION_FILE, 'utf8'));
+            const data = JSON.parse(fs.readFileSync(SESSION_FILE, 'utf8'));
+            return migrateDataStructure(data);
         }
     } catch (e) {
         console.error('Error loading session data:', e);
     }
     return {
+        version: '2.0.0',
         sessions: [],
         totalUsage: 0,
         lastReset: new Date().toISOString(),
         monthlySessionCount: 0,
-        lastMonthReset: new Date().toISOString()
+        lastMonthReset: new Date().toISOString(),
+        autoDetection: {
+            enabled: config.get('sessions.autoDetect', true),
+            lastScan: null,
+            activeSessions: []
+        }
     };
+}
+
+function migrateDataStructure(data) {
+    // Check if migration is needed
+    if (data.version === '2.0.0') {
+        return data; // Already migrated
+    }
+    
+    console.log('🔄 Migrating session data to v2.0.0...');
+    
+    // Migrate old sessions to new format
+    const migratedSessions = (data.sessions || []).map(session => {
+        // Check if session is already in new format
+        if (session.project && session.tokens) {
+            return session;
+        }
+        
+        // Migrate old session format
+        const workingDir = session.workingDirectory || process.cwd();
+        return {
+            id: session.id || generateUUID(),
+            startTime: session.startTime,
+            endTime: session.endTime,
+            duration: session.duration,
+            mode: 'claude-max', // Default for old sessions
+            workingDirectory: workingDir,
+            project: config.get('project.autoDetect', true) ? 
+                ProjectDetector.detectProject(workingDir) : {
+                    name: path.basename(workingDir),
+                    path: workingDir,
+                    type: 'unknown',
+                    git: null
+                },
+            tags: [],
+            warnings: {
+                '30min': false,
+                '10min': false
+            },
+            tokens: {
+                input: 0,
+                output: 0,
+                cacheCreate: 0,
+                cacheRead: 0
+            },
+            environment: session.environment || 'WSL',
+            claudeSessionId: session.claudeSessionId || null,
+            claudeCodeVersion: session.claudeCodeVersion || null
+        };
+    });
+    
+    const migratedData = {
+        version: '2.0.0',
+        sessions: migratedSessions,
+        totalUsage: data.totalUsage || 0,
+        lastReset: data.lastReset || new Date().toISOString(),
+        monthlySessionCount: data.monthlySessionCount || 0,
+        lastMonthReset: data.lastMonthReset || new Date().toISOString(),
+        autoDetection: {
+            enabled: config.get('sessions.autoDetect', true),
+            lastScan: null,
+            activeSessions: []
+        }
+    };
+    
+    console.log(`✅ Migrated ${migratedSessions.length} sessions to new format`);
+    return migratedData;
 }
 
 function saveData(data) {
@@ -232,7 +325,75 @@ function scheduleWarnings(sessionStart) {
     }
 }
 
-function start() {
+function scheduleWarningsForMode(sessionStart, timerConfig) {
+    clearWarnings();
+    
+    const startTime = new Date(sessionStart).getTime();
+    const now = Date.now();
+    const expiryTime = startTime + timerConfig.duration;
+    
+    // Schedule warnings based on timer configuration
+    timerConfig.warnings.forEach(warningTime => {
+        const warningTriggerTime = expiryTime - warningTime;
+        const timeUntilWarning = warningTriggerTime - now;
+        
+        if (timeUntilWarning > 0) {
+            const timeout = setTimeout(() => {
+                const remainingTime = formatTime(warningTime);
+                console.log(`\n🟡 [${timerConfig.name}] ⚠️  WARNING ⚠️`);
+                console.log(`⏰ ${remainingTime} remaining in your session!`);
+                console.log('💡 Consider saving your work and preparing for session end.');
+                
+                showWSLNotification(
+                    `${timerConfig.name} Session Warning`,
+                    `${remainingTime} remaining! Save your work.`
+                );
+            }, timeUntilWarning);
+            warningTimeouts.push(timeout);
+        }
+    });
+    
+    // Schedule session end if auto-end is enabled
+    if (timerConfig.autoEnd) {
+        const timeUntilEnd = expiryTime - now;
+        if (timeUntilEnd > 0) {
+            const endTimeout = setTimeout(() => {
+                console.log(`\n⏰ [${timerConfig.name}] Session automatically ended`);
+                console.log('🔄 Starting break period...');
+                
+                // Auto-end the session
+                end();
+                
+                // Show break notification
+                if (timerConfig.breakDuration) {
+                    showWSLNotification(
+                        `${timerConfig.name} Break Time`,
+                        `Take a ${formatTime(timerConfig.breakDuration)} break!`
+                    );
+                }
+            }, timeUntilEnd);
+            warningTimeouts.push(endTimeout);
+        }
+    } else {
+        // Schedule expiry warning for non-auto-end sessions
+        const timeUntilExpiry = expiryTime - now;
+        if (timeUntilExpiry > 0) {
+            const expiryTimeout = setTimeout(() => {
+                console.log(`\n💀 [${timerConfig.name}] ⚠️  SESSION EXPIRED ⚠️`);
+                console.log('🕐 Your session time has ended!');
+                console.log('🔄 Please end this session and start a new one if needed');
+                
+                showWSLNotification(
+                    `${timerConfig.name} Session EXPIRED`,
+                    'Your session time has ended! Please start a new session.'
+                );
+            }, timeUntilExpiry);
+            warningTimeouts.push(expiryTimeout);
+        }
+    }
+}
+
+function start(mode = 'claude-max', customDuration = null, customTags = []) {
     const now = new Date();
     const data = loadData();
     
@@ -274,17 +435,55 @@ function start() {
         return;
     }
     
+    // Get timer mode configuration
+    const timerConfig = config.getTimerMode(mode);
+    
+    // Use custom duration if provided
+    if (customDuration && mode === 'custom') {
+        timerConfig.duration = customDuration * 60 * 1000; // Convert minutes to milliseconds
+    }
+    
+    // Detect project information
+    const workingDirectory = process.cwd();
+    const project = config.get('project.autoDetect', true) ? 
+        ProjectDetector.detectProject(workingDirectory) : {
+            name: path.basename(workingDirectory),
+            path: workingDirectory,
+            type: 'unknown',
+            git: null
+        };
+    
+    // Add custom tags
+    const validatedTags = ProjectDetector.validateTags(customTags);
+    
     // Start new session
-    const sessionId = `session_${Date.now()}`;
+    const sessionId = generateUUID();
     const session = {
         id: sessionId,
         startTime: now.toISOString(),
         endTime: null,
         duration: null,
+        mode: mode,
+        workingDirectory: workingDirectory,
+        project: {
+            ...project,
+            tags: validatedTags
+        },
+        tags: validatedTags,
+        warnings: {
+            '30min': false,
+            '10min': false
+        },
+        tokens: {
+            input: 0,
+            output: 0,
+            cacheCreate: 0,
+            cacheRead: 0
+        },
         environment: 'WSL',
-        workingDirectory: process.cwd(),
-        windowsPath: null, // Will be filled by WSL path conversion if needed
-        claudeCodeVersion: claudeStatus.version || 'Unknown'
+        claudeSessionId: null, // Will be filled by auto-detection
+        claudeCodeVersion: claudeStatus.version || 'Unknown',
+        timerConfig: timerConfig
     };
     
     // Increment monthly session count
@@ -293,17 +492,28 @@ function start() {
     data.sessions.push(session);
     saveData(data);
     
-    console.log('✅ [WSL] Claude Code session tracking started!');
+    console.log(`✅ [WSL] ${timerConfig.name} session started!`);
     console.log(`🆔 Session ID: ${sessionId}`);
     console.log(`🕐 Start time: ${now.toLocaleString()}`);
-    console.log(`⏰ Will expire at: ${new Date(now.getTime() + MAX_SESSION_MS).toLocaleString()}`);
-    console.log(`📁 Working directory: ${process.cwd()}`);
+    console.log(`⏰ Duration: ${formatTime(timerConfig.duration)}`);
+    console.log(`⏰ Will expire at: ${new Date(now.getTime() + timerConfig.duration).toLocaleString()}`);
+    console.log(`📁 Working directory: ${workingDirectory}`);
+    console.log(`🏗️  Project: ${project.name} (${project.type})`);
+    if (project.git) {
+        console.log(`🌿 Git branch: ${project.git.branch} (${project.git.lastCommit})`);
+    }
+    if (validatedTags.length > 0) {
+        console.log(`🏷️  Tags: ${validatedTags.join(', ')}`);
+    }
     console.log(`📊 Monthly sessions used: ${data.monthlySessionCount}/50`);
     console.log(`🔧 Claude Code authenticated: ${claudeStatus.authenticated ? '✅' : '❌'}`);
-    console.log(`⚠️  Warnings scheduled for 30min and 10min before expiry`);
+    if (timerConfig.warnings.length > 0) {
+        const warningTimes = timerConfig.warnings.map(w => formatTime(w)).join(', ');
+        console.log(`⚠️  Warnings scheduled at: ${warningTimes} before expiry`);
+    }
     console.log(`📱 Windows notifications enabled`);
     
-    scheduleWarnings(session.startTime);
+    scheduleWarningsForMode(session.startTime, timerConfig);
     
     // Show monthly limit warning if approaching limit
     if (data.monthlySessionCount >= 45) {
@@ -421,12 +631,36 @@ function checkClaudeCode() {
     console.log('='.repeat(30) + '\n');
 }
 
-// Command line interface
+// Enhanced command line interface
 const command = process.argv[2];
+const args = process.argv.slice(3);
+
+// Parse command-line arguments
+function parseArgs(args) {
+    const parsed = { flags: [], options: {} };
+    for (let i = 0; i < args.length; i++) {
+        const arg = args[i];
+        if (arg.startsWith('--')) {
+            const key = arg.substring(2);
+            if (i + 1 < args.length && !args[i + 1].startsWith('--')) {
+                parsed.options[key] = args[i + 1];
+                i++;
+            } else {
+                parsed.flags.push(key);
+            }
+        }
+    }
+    return parsed;
+}
+
+const parsedArgs = parseArgs(args);
 
 switch (command) {
     case 'start':
-        start();
+        const mode = parsedArgs.options.mode || 'claude-max';
+        const duration = parsedArgs.options.duration ? parseInt(parsedArgs.options.duration) : null;
+        const tags = parsedArgs.options.tags ? parsedArgs.options.tags.split(',') : [];
+        start(mode, duration, tags);
         break;
     case 'end':
         end();
@@ -438,15 +672,282 @@ switch (command) {
     case 'diagnostic':
         checkClaudeCode();
         break;
-    default:
-        console.log('Usage: node scripts/session-tracker.js [start|end|status|check]');
-        console.log('');
-        console.log('Commands:');
-        console.log('  start     - Start tracking a new Claude Code session');
-        console.log('  end       - End the current session');
-        console.log('  status    - Show current session status');
-        console.log('  check     - Diagnostic check of Claude Code installation');
+    case 'export':
+        const format = parsedArgs.options.format || 'json';
+        const output = parsedArgs.options.output || `./claude-sessions-${Date.now()}`;
+        const dateRange = parsedArgs.options.range;
+        exportSessions(format, output, dateRange);
         break;
+    case 'auto':
+        startAutoDetection();
+        break;
+    case 'config':
+        const configAction = args[0];
+        handleConfigCommand(configAction, args.slice(1));
+        break;
+    case 'project':
+        const projectAction = args[0];
+        handleProjectCommand(projectAction, args.slice(1));
+        break;
+    default:
+        showHelp();
+        break;
+}
+
+function showHelp() {
+    console.log('Claude Code Session Tracker v2.0.0');
+    console.log('');
+    console.log('Usage: node scripts/session-tracker.js <command> [options]');
+    console.log('');
+    console.log('Commands:');
+    console.log('  start [--mode MODE] [--duration MINUTES] [--tags TAG1,TAG2]');
+    console.log('        Start tracking a new session');
+    console.log('        Modes: claude-max, pomodoro, deep-work, quick-fix, custom');
+    console.log('');
+    console.log('  end   End the current session');
+    console.log('');
+    console.log('  status');
+    console.log('        Show current session status');
+    console.log('');
+    console.log('  export --format FORMAT --output PATH [--range DAYS]');
+    console.log('        Export sessions (formats: csv, json, markdown, all)');
+    console.log('');
+    console.log('  auto  Start auto-detection of Claude Code sessions');
+    console.log('');
+    console.log('  config [list|set|reset] [KEY VALUE]');
+    console.log('        Manage configuration');
+    console.log('');
+    console.log('  project [detect|info] [PATH]');
+    console.log('        Project detection utilities');
+    console.log('');
+    console.log('  check Diagnostic check of Claude Code installation');
+    console.log('');
+    console.log('Examples:');
+    console.log('  node scripts/session-tracker.js start --mode pomodoro');
+    console.log('  node scripts/session-tracker.js start --mode custom --duration 45');
+    console.log('  node scripts/session-tracker.js export --format csv --output ./my-sessions');
+    console.log('  node scripts/session-tracker.js config set sessions.autoDetect true');
+}
+
+// New command handlers
+function exportSessions(format, outputPath, dateRange) {
+    const data = loadData();
+    let sessions = data.sessions;
+    
+    // Filter by date range if specified
+    if (dateRange) {
+        const days = parseInt(dateRange);
+        const cutoffDate = new Date();
+        cutoffDate.setDate(cutoffDate.getDate() - days);
+        sessions = ExportUtils.filterByDateRange(sessions, cutoffDate, new Date());
+    }
+    
+    console.log(`📊 Exporting ${sessions.length} sessions...`);
+    
+    try {
+        if (format === 'all') {
+            const results = ExportUtils.exportToAll(sessions, outputPath);
+            console.log('✅ Export completed to multiple formats');
+            Object.entries(results).forEach(([fmt, path]) => {
+                console.log(`  ${fmt.toUpperCase()}: ${path}`);
+            });
+        } else {
+            let result;
+            switch (format) {
+                case 'csv':
+                    result = ExportUtils.exportToCSV(sessions, `${outputPath}.csv`);
+                    break;
+                case 'json':
+                    result = ExportUtils.exportToJSON(sessions, `${outputPath}.json`);
+                    break;
+                case 'markdown':
+                    result = ExportUtils.exportToMarkdown(sessions, `${outputPath}.md`);
+                    break;
+                default:
+                    console.error('❌ Unknown format:', format);
+                    return;
+            }
+            console.log(`✅ Export completed: ${result}`);
+        }
+    } catch (error) {
+        console.error('❌ Export failed:', error.message);
+    }
+}
+
+function startAutoDetection() {
+    if (!ClaudeAutoDetector.isAvailable()) {
+        console.log('❌ Auto-detection not available - Claude config directory not found');
+        console.log('💡 Make sure Claude Code is installed and has been run at least once');
+        return;
+    }
+    
+    console.log('🔍 Starting auto-detection mode...');
+    
+    autoDetector = new ClaudeAutoDetector({
+        pollingInterval: config.get('sessions.pollingInterval', 2000)
+    });
+    
+    // Set up event handlers
+    autoDetector.on('session_started', (sessionData) => {
+        console.log(`🚀 Claude Code session auto-detected: ${sessionData.sessionId}`);
+        console.log(`📁 Working directory: ${sessionData.cwd}`);
+        
+        if (config.get('sessions.autoStart', false)) {
+            autoStartSession(sessionData);
+        }
+    });
+    
+    autoDetector.on('session_updated', (sessionData) => {
+        // Update local tracking if we have an active session
+        const data = loadData();
+        const activeSession = data.sessions.find(s => !s.endTime && s.claudeSessionId === sessionData.sessionId);
+        if (activeSession) {
+            activeSession.tokens = sessionData.tokens;
+            saveData(data);
+        }
+    });
+    
+    autoDetector.on('session_ended', (sessionData) => {
+        console.log(`📊 Claude Code session ended: ${sessionData.sessionId}`);
+        // Auto-end local session if it exists
+        autoEndSession(sessionData);
+    });
+    
+    autoDetector.startMonitoring();
+    
+    // Keep process alive
+    process.on('SIGINT', () => {
+        console.log('\\n🛑 Auto-detection stopped');
+        if (autoDetector) {
+            autoDetector.stopMonitoring();
+        }
+        process.exit(0);
+    });
+    
+    console.log('✅ Auto-detection started - Press Ctrl+C to stop');
+    setInterval(() => {}, 1000);
+}
+
+function autoStartSession(detectedSession) {
+    const workingDir = ClaudeAutoDetector.extractWorkingDirectory(detectedSession.filePath);
+    const project = ProjectDetector.detectProject(workingDir);
+    
+    const sessionData = {
+        id: generateUUID(),
+        startTime: detectedSession.startTime,
+        endTime: null,
+        duration: null,
+        mode: 'claude-max',
+        workingDirectory: workingDir,
+        project: project,
+        tags: [],
+        warnings: { '30min': false, '10min': false },
+        tokens: detectedSession.tokens || { input: 0, output: 0, cacheCreate: 0, cacheRead: 0 },
+        environment: 'WSL',
+        claudeSessionId: detectedSession.sessionId,
+        claudeCodeVersion: null
+    };
+    
+    const data = loadData();
+    data.sessions.push(sessionData);
+    saveData(data);
+    
+    console.log(`✅ Auto-started tracking for project: ${project.name}`);
+    scheduleWarnings(sessionData.startTime);
+}
+
+function autoEndSession(detectedSession) {
+    const data = loadData();
+    const activeSession = data.sessions.find(s => !s.endTime && s.claudeSessionId === detectedSession.sessionId);
+    
+    if (activeSession) {
+        const now = new Date();
+        activeSession.endTime = now.toISOString();
+        activeSession.duration = now - new Date(activeSession.startTime);
+        activeSession.tokens = detectedSession.tokens || activeSession.tokens;
+        
+        data.totalUsage += activeSession.duration;
+        saveData(data);
+        
+        console.log(`✅ Auto-ended session: ${formatTime(activeSession.duration)}`);
+    }
+}
+
+function handleConfigCommand(action, args) {
+    switch (action) {
+        case 'list':
+            console.log('Current configuration:');
+            console.log(JSON.stringify(config.config, null, 2));
+            break;
+        case 'set':
+            if (args.length < 2) {
+                console.log('Usage: config set <key> <value>');
+                return;
+            }
+            const [key, value] = args;
+            let parsedValue;
+            try {
+                parsedValue = JSON.parse(value);
+            } catch {
+                parsedValue = value;
+            }
+            if (config.set(key, parsedValue)) {
+                console.log(`✅ Set ${key} = ${parsedValue}`);
+            } else {
+                console.log(`❌ Failed to set ${key}`);
+            }
+            break;
+        case 'reset':
+            if (config.reset()) {
+                console.log('✅ Configuration reset to defaults');
+            } else {
+                console.log('❌ Failed to reset configuration');
+            }
+            break;
+        default:
+            console.log('Available config actions: list, set, reset');
+            break;
+    }
+}
+
+function handleProjectCommand(action, args) {
+    switch (action) {
+        case 'detect':
+            const projectPath = args[0] || process.cwd();
+            const project = ProjectDetector.detectProject(projectPath);
+            console.log('Project detection result:');
+            console.log(JSON.stringify(project, null, 2));
+            break;
+        case 'info':
+            const data = loadData();
+            const projects = {};
+            data.sessions.forEach(session => {
+                if (session.project) {
+                    const name = session.project.name;
+                    if (!projects[name]) {
+                        projects[name] = {
+                            name,
+                            type: session.project.type,
+                            sessions: 0,
+                            totalTime: 0
+                        };
+                    }
+                    projects[name].sessions++;
+                    if (session.duration) {
+                        projects[name].totalTime += session.duration;
+                    }
+                }
+            });
+            
+            console.log('Project summary:');
+            Object.values(projects).forEach(project => {
+                console.log(`${project.name} (${project.type}): ${project.sessions} sessions, ${formatTime(project.totalTime)}`);
+            });
+            break;
+        default:
+            console.log('Available project actions: detect, info');
+            break;
+    }
 }
 
 // Keep the process alive for warnings
