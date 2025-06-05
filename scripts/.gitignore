@@ -1,0 +1,16 @@
+# Session data (user-specific)
+.claude-sessions.json
+
+# Node modules
+node_modules/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+
+# Logs
+*.log
