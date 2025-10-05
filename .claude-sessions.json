@@ -1,0 +1,123 @@
+{
+  "version": "2.0.0",
+  "sessions": [
+    {
+      "id": "3ff5ca6c-722f-475b-ae7a-6e7497ca23d4",
+      "startTime": "2025-06-05T11:38:23.190Z",
+      "endTime": "2025-06-05T11:40:46.262Z",
+      "duration": 143072,
+      "mode": "pomodoro",
+      "workingDirectory": "/mnt/c/Users/dougm/Documents/GitHub/Claude-Code-Time-Tracker-WSL",
+      "project": {
+        "name": "Claude-Code-Time-Tracker-WSL",
+        "path": "/mnt/c/Users/dougm/Documents/GitHub/Claude-Code-Time-Tracker-WSL",
+        "type": "git",
+        "git": {
+          "branch": "main",
+          "lastCommit": "49ed1650",
+          "lastCommitMessage": "Initial commit: Claude Code Session Tracker with WSL support",
+          "remoteUrl": "https://github.com/dougm1966/Claude-Code-Time-Tracker-WSL.git",
+          "hasUncommittedChanges": true
+        },
+        "packageInfo": {
+          "remoteUrl": "https://github.com/dougm1966/Claude-Code-Time-Tracker-WSL.git"
+        },
+        "tags": [
+          "test",
+          "phase1"
+        ]
+      },
+      "tags": [
+        "test",
+        "phase1"
+      ],
+      "warnings": {
+        "30min": false,
+        "10min": false
+      },
+      "tokens": {
+        "input": 0,
+        "output": 0,
+        "cacheCreate": 0,
+        "cacheRead": 0
+      },
+      "environment": "WSL",
+      "claudeSessionId": null,
+      "claudeCodeVersion": "1.0.11 (Claude Code)",
+      "timerConfig": {
+        "name": "Pomodoro",
+        "duration": 1500000,
+        "warnings": [
+          300000
+        ],
+        "autoEnd": true,
+        "breakDuration": 300000,
+        "longBreakAfter": 4,
+        "longBreakDuration": 900000,
+        "description": "Pomodoro Technique: 25min work + 5min break"
+      }
+    },
+    {
+      "id": "ede3332b-e692-430d-82e8-dea2fc587cdf",
+      "startTime": "2025-06-05T13:43:11.579Z",
+      "endTime": null,
+      "duration": null,
+      "mode": "claude-max",
+      "workingDirectory": "/mnt/c/Users/dougm/Documents/GitHub/Claude-Code-Time-Tracker-WSL",
+      "project": {
+        "name": "Claude-Code-Time-Tracker-WSL",
+        "path": "/mnt/c/Users/dougm/Documents/GitHub/Claude-Code-Time-Tracker-WSL",
+        "type": "git",
+        "git": {
+          "branch": "main",
+          "lastCommit": "49ed1650",
+          "lastCommitMessage": "Initial commit: Claude Code Session Tracker with WSL support",
+          "remoteUrl": "https://github.com/dougm1966/Claude-Code-Time-Tracker-WSL.git",
+          "hasUncommittedChanges": true
+        },
+        "packageInfo": {
+          "remoteUrl": "https://github.com/dougm1966/Claude-Code-Time-Tracker-WSL.git"
+        },
+        "tags": []
+      },
+      "tags": [],
+      "warnings": {
+        "30min": false,
+        "10min": false
+      },
+      "tokens": {
+        "input": 0,
+        "output": 0,
+        "cacheCreate": 0,
+        "cacheRead": 0
+      },
+      "environment": "WSL",
+      "claudeSessionId": null,
+      "claudeCodeVersion": "1.0.11 (Claude Code)",
+      "timerConfig": {
+        "name": "Claude Max",
+        "duration": 18000000,
+        "warnings": [
+          1800000,
+          600000
+        ],
+        "autoEnd": false,
+        "description": "Standard 5-hour Claude Code session"
+      }
+    }
+  ],
+  "totalUsage": 143072,
+  "lastReset": "2025-06-05T11:38:23.190Z",
+  "monthlySessionCount": 2,
+  "lastMonthReset": "2025-06-05T11:38:23.191Z",
+  "autoDetection": {
+    "enabled": true,
+    "lastScan": null,
+    "activeSessions": []
+  },
+  "lastUpdate": "2025-06-05T13:43:12.925Z",
+  "claudeCodeStatus": {
+    "authenticated": true,
+    "version": "1.0.11 (Claude Code)"
+  }
+}

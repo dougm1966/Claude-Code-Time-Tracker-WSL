@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep:*)",
+      "Bash(node:*)",
+      "Bash(rm:*)",
+      "Bash(find:*)",
+      "Bash(ls:*)",
+      "Bash(claude mcp)",
+      "Bash(claude mcp:*)",
+      "Bash(claude --debug 2 >& 1)",
+      "Bash(timeout:*)",
+      "Bash(echo:*)",
+      "mcp__sequential-thinking__sequentialthinking"
+    ],
+    "deny": []
+  }
+}
